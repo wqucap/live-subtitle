@@ -16,17 +16,22 @@ CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "live-subtitle.log"
 
 
-def setup_cuda_dlls() -> None:
-    """Make cuBLAS / cuDNN visible to CTranslate2 (faster-whisper) on Windows."""
+def cuda_dll_dirs() -> list[Path]:
+    """Directories of the pip-installed nvidia-cublas-cu12 / nvidia-cudnn-cu12 DLLs
+    (site-packages when run from source, _internal when frozen by PyInstaller)."""
     candidates = []
-    # pip packages nvidia-cublas-cu12 / nvidia-cudnn-cu12 (source run, or collected into _internal by PyInstaller)
     search_roots = [Path(p) for p in sys.path if p] + [Path(getattr(sys, "_MEIPASS", ROOT))]
     for base in search_roots:
         for sub in ("nvidia/cublas/bin", "nvidia/cudnn/bin", "nvidia/cuda_runtime/bin"):
             d = base / sub
             if d.is_dir():
                 candidates.append(d)
-    for d in dict.fromkeys(candidates):
+    return list(dict.fromkeys(candidates))
+
+
+def setup_cuda_dlls() -> None:
+    """Make cuBLAS / cuDNN visible to CTranslate2 (faster-whisper) on Windows."""
+    for d in cuda_dll_dirs():
         try:
             os.add_dll_directory(str(d))
         except OSError:

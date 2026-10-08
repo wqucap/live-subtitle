@@ -13,7 +13,7 @@ import numpy as np
 
 from audio import TARGET_RATE, LoopbackCapture
 from config import Config
-from translator import LlamaServer, Translator
+from translator import LlamaServer, Translator, ensure_local_model
 from paths import WHISPER_DIR
 from vad import FRAME, SpeechDetector
 
@@ -57,15 +57,24 @@ class Engine:
         key = (self.cfg.whisper_model, self.cfg.whisper_compute_type)
         if self._whisper is not None and self._whisper_key == key:
             return
-        self.cb.status("asr", "loading", f"加载 Whisper {self.cfg.whisper_model}（首次会自动下载）…")
         from faster_whisper import WhisperModel
 
+        # Flat models/whisper/<name>/ instead of the deep HF cache layout, which can exceed MAX_PATH
+        model_dir = WHISPER_DIR / self.cfg.whisper_model
+        if not (model_dir / "model.bin").exists():
+            self.cb.status("asr", "loading", f"首次使用，下载语音识别模型 {self.cfg.whisper_model}（约 1.6 GB）…")
+            from faster_whisper.utils import _MODELS
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                _MODELS[self.cfg.whisper_model], local_dir=str(model_dir),
+                allow_patterns=["config.json", "preprocessor_config.json", "model.bin",
+                                "tokenizer.json", "vocabulary.*"],
+            )
+        self.cb.status("asr", "loading", f"加载 Whisper {self.cfg.whisper_model}…")
         self._whisper = None
         self._whisper = WhisperModel(
-            self.cfg.whisper_model, device="cuda",
-            compute_type=self.cfg.whisper_compute_type,
-            download_root=str(WHISPER_DIR),
-        )
+            str(model_dir), device="cuda", compute_type=self.cfg.whisper_compute_type)
         self._whisper_key = key
         self.cb.status("asr", "ok", f"Whisper {self.cfg.whisper_model} 已就绪")
 
@@ -74,6 +83,9 @@ class Engine:
             self._translator.close()
             self._translator = None
         if self.cfg.mode == "local":
+            ensure_local_model(self.cfg.local_model_file, lambda done, total: self.cb.status(
+                "mt", "loading",
+                f"首次使用，下载翻译模型 {done / 2**30:.2f} / {total / 2**30:.2f} GB（{done * 100 // max(total, 1)}%）…"))
             self.cb.status("mt", "loading", "启动本地翻译模型 Hunyuan-MT-7B…")
             if self._server is None:
                 self._server = LlamaServer(self.cfg.local_model_file, self.cfg.local_port, self.cfg.local_gpu_layers)

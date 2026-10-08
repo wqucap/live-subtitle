@@ -4,9 +4,9 @@ import html
 import threading
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPushButton, QRadioButton, QSlider, QSpinBox, QTabWidget, QTextBrowser,
     QVBoxLayout, QWidget,
 )
@@ -23,7 +23,7 @@ HELP_HTML = """
 <h3>快速开始</h3>
 <ol>
 <li>在「主页」选择模式（第一次用推荐 <b>🎬 视频模式</b>）。</li>
-<li>点 <b>▶ 开始翻译</b>。第一次会自动下载语音识别模型（约 1.6 GB），之后秒开。</li>
+<li>点 <b>▶ 开始翻译</b>。第一次会自动下载语音识别模型（约 1.6 GB）和翻译模型（约 4.3 GB），「运行状态」里能看到进度，之后秒开。</li>
 <li>播放任何英文视频/语音，屏幕下方的字幕窗口就会显示中文。</li>
 </ol>
 <h3>两种模式</h3>
@@ -34,6 +34,7 @@ HELP_HTML = """
 <h3>字幕窗口</h3>
 <ul>
 <li>按住字幕窗口任意位置拖动，右下角拖动可缩放。</li>
+<li>中文、英文的字号和颜色可以分别调整（点颜色按钮选色），「恢复默认样式」一键还原。</li>
 <li>勾选 <b>🔒 锁定字幕窗口</b> 后鼠标会穿透字幕，玩游戏不会误点；要移动时取消勾选。</li>
 <li>游戏请用 <b>无边框窗口</b> 模式，独占全屏时看不到字幕。</li>
 </ul>
@@ -171,10 +172,25 @@ class MainWindow(QMainWindow):
         self.cb_en.toggled.connect(self._style_changed)
         of.addRow(self.cb_en)
         self.sp_font = QSpinBox()
-        self.sp_font.setRange(14, 72)
+        self.sp_font.setRange(12, 96)
+        self.sp_font.setSuffix(" px")
         self.sp_font.setValue(self.cfg.font_size)
         self.sp_font.valueChanged.connect(self._style_changed)
-        of.addRow("中文字号", self.sp_font)
+        self.btn_zh_color = QPushButton()
+        self.btn_zh_color.clicked.connect(lambda: self._pick_color("zh_color", self.btn_zh_color))
+        of.addRow("中文 大小 / 颜色", self._pair(self.sp_font, self.btn_zh_color))
+        self.sp_en_font = QSpinBox()
+        self.sp_en_font.setRange(10, 72)
+        self.sp_en_font.setSuffix(" px")
+        self.sp_en_font.setValue(self.cfg.en_font_size)
+        self.sp_en_font.valueChanged.connect(self._style_changed)
+        self.btn_en_color = QPushButton()
+        self.btn_en_color.clicked.connect(lambda: self._pick_color("en_color", self.btn_en_color))
+        of.addRow("英文 大小 / 颜色", self._pair(self.sp_en_font, self.btn_en_color))
+        self._paint_color_buttons()
+        reset = QPushButton("恢复默认样式")
+        reset.clicked.connect(self._reset_style)
+        of.addRow(reset)
         self.sl_opacity = QSlider(Qt.Horizontal)
         self.sl_opacity.setRange(0, 100)
         self.sl_opacity.setValue(self.cfg.bg_opacity)
@@ -280,6 +296,7 @@ class MainWindow(QMainWindow):
         c.api_model = self.ed_model.text().strip()
         c.show_english = self.cb_en.isChecked()
         c.font_size = self.sp_font.value()
+        c.en_font_size = self.sp_en_font.value()
         c.bg_opacity = self.sl_opacity.value()
         c.overlay_geometry = self.overlay.geometry_list()
 
@@ -291,8 +308,40 @@ class MainWindow(QMainWindow):
     def _style_changed(self, *_):
         self.cfg.show_english = self.cb_en.isChecked()
         self.cfg.font_size = self.sp_font.value()
+        self.cfg.en_font_size = self.sp_en_font.value()
         self.cfg.bg_opacity = self.sl_opacity.value()
         self.overlay.apply_style()
+
+    @staticmethod
+    def _pair(spin: QSpinBox, button: QPushButton) -> QWidget:
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(spin, 1)
+        h.addWidget(button, 1)
+        return w
+
+    def _paint_color_buttons(self):
+        for btn, color in ((self.btn_zh_color, self.cfg.zh_color), (self.btn_en_color, self.cfg.en_color)):
+            text = "#000" if QColor(color).lightness() > 140 else "#fff"
+            btn.setText(f"🎨 {color}")
+            btn.setStyleSheet(f"background: {color}; color: {text}; border: 1px solid #888; padding: 4px;")
+
+    def _pick_color(self, attr: str, btn: QPushButton):
+        color = QColorDialog.getColor(QColor(getattr(self.cfg, attr)), self, "选择字幕颜色")
+        if color.isValid():
+            setattr(self.cfg, attr, color.name())
+            self._paint_color_buttons()
+            self.overlay.apply_style()
+
+    def _reset_style(self):
+        d = Config()
+        self.cfg.zh_color, self.cfg.en_color = d.zh_color, d.en_color
+        self.sp_font.setValue(d.font_size)
+        self.sp_en_font.setValue(d.en_font_size)
+        self.sl_opacity.setValue(d.bg_opacity)
+        self._paint_color_buttons()
+        self._style_changed()
 
     def _toggle(self):
         if self.engine.running:

@@ -1,11 +1,12 @@
 """Translation backends. Both talk to an OpenAI-compatible /chat/completions endpoint:
 local = llama.cpp `llama-server` running Hunyuan-MT-7B, api = any online provider (e.g. SiliconFlow)."""
+import os
 import subprocess
 import time
 
 import httpx
 
-from paths import LLAMA_DIR, MODELS_DIR
+from paths import LLAMA_DIR, MODELS_DIR, cuda_dll_dirs
 
 # Prompt format recommended by the Hunyuan-MT model card for XX -> ZH.
 PROMPT_ZH = "把下面的文本翻译成{lang}，不要额外解释。\n\n{text}"
@@ -46,6 +47,37 @@ class Translator:
         self.client.close()
 
 
+LOCAL_MODEL_URL = "https://huggingface.co/mradermacher/Hunyuan-MT-7B-GGUF/resolve/main/{file}"
+
+
+def ensure_local_model(model_file: str, progress) -> None:
+    """Download the GGUF on first use (resumable). progress(done_bytes, total_bytes)."""
+    path = MODELS_DIR / model_file
+    if path.exists():
+        return
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    part = path.with_suffix(path.suffix + ".part")
+    done = part.stat().st_size if part.exists() else 0
+    headers = {"Range": f"bytes={done}-"} if done else {}
+    url = LOCAL_MODEL_URL.format(file=model_file)
+    with httpx.stream("GET", url, headers=headers, follow_redirects=True,
+                      timeout=httpx.Timeout(60.0, connect=15.0)) as r:
+        if r.status_code == 200:
+            done = 0  # server ignored the range, start over
+        elif r.status_code != 206:
+            raise RuntimeError(f"下载翻译模型失败：HTTP {r.status_code}")
+        total = done + int(r.headers.get("Content-Length", 0))
+        last = 0.0
+        with open(part, "ab" if done else "wb") as f:
+            for chunk in r.iter_bytes(1 << 20):
+                f.write(chunk)
+                done += len(chunk)
+                if time.time() - last > 0.5:
+                    progress(done, total)
+                    last = time.time()
+    part.replace(path)
+
+
 class LlamaServer:
     """Runs bin/llama/llama-server.exe as a hidden child process."""
 
@@ -73,8 +105,11 @@ class LlamaServer:
             "-ngl", str(self.gpu_layers), "-c", "4096", "-np", "1",
             "--no-webui",
         ]
+        # the release zip ships cuBLAS only once (for Whisper); let llama-server find it too
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join([str(LLAMA_DIR)] + [str(d) for d in cuda_dll_dirs()] + [env.get("PATH", "")])
         self.proc = subprocess.Popen(
-            cmd, cwd=str(LLAMA_DIR),
+            cmd, cwd=str(LLAMA_DIR), env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )

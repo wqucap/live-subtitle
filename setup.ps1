@@ -23,6 +23,11 @@ if (-not (Test-Path bin\llama\llama-server.exe)) {
         Expand-Archive "$env:TEMP\$z" -DestinationPath bin\llama -Force
         Remove-Item "$env:TEMP\$z"
     }
+    # keep only what llama-server needs; cuBLAS comes from the nvidia-cublas-cu12 pip package (shared with Whisper)
+    Get-ChildItem bin\llama -File | Where-Object {
+        -not ($_.Name -notlike 'cublas*' -and ($_.Name -eq 'llama-server.exe' -or $_.Name -like 'LICENSE*' -or
+              ($_.Extension -eq '.dll' -and ($_.Name -notlike '*-impl.dll' -or $_.Name -eq 'llama-server-impl.dll'))))
+    } | ForEach-Object { Remove-Item -LiteralPath $_.FullName }
 }
 if (-not (Test-Path models\Hunyuan-MT-7B.Q4_K_M.gguf)) {
     Write-Host "Downloading Hunyuan-MT-7B (about 4.3 GB)"

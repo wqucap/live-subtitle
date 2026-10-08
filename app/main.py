@@ -2,6 +2,13 @@ import logging
 import os
 import sys
 
+# A --windowed exe has no console: give libraries that print/progress-bar somewhere harmless to write
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
@@ -22,17 +29,34 @@ def selftest(seconds: float) -> None:
     from config import Config
     from engine import Callbacks, Engine
 
+    import threading
+
     log = logging.getLogger("selftest")
+    done = threading.Event()
+
+    def status(c, s, m):
+        if "下载" not in m or s != "loading":
+            log.info("status %s %s %s", c, s, m)
+        if c == "audio" and s == "ok":
+            done.set()
+
+    def error(m):
+        log.error("error %s", m)
+        done.set()
+
     e = Engine(Config.load(), Callbacks(
-        status=lambda c, s, m: log.info("status %s %s %s", c, s, m),
-        partial=lambda t: None,
+        status=status, partial=lambda t: None,
         final=lambda i, t: log.info("final %d %s", i, t),
         translated=lambda i, en, zh, s: log.info("translated %d (%.2fs) %s", i, s, zh),
-        error=lambda m: log.error("error %s", m),
+        error=error,
     ))
     e.start()
-    time.sleep(seconds)
+    done.wait(3600)  # first run may be downloading models
+    if e.running:
+        log.info("test translation: %s", e.translate_once("Watch out, there's a sniper on the roof!"))
+        time.sleep(seconds)
     e.stop(unload=True)
+    log.info("selftest finished")
 
 
 def main():

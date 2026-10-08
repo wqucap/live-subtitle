@@ -13,6 +13,10 @@ $app = Join-Path $PSScriptRoot "app"
     --exclude-module tkinter --exclude-module matplotlib
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
+if (Get-Process LiveSubtitle -ErrorAction SilentlyContinue) {
+    Write-Host "LiveSubtitle.exe is running - new build left in build\dist\LiveSubtitle (close the app and re-run to install it here)"
+    exit 0
+}
 if (Test-Path _internal) { Remove-Item -Recurse -Force _internal }
 Move-Item build\dist\LiveSubtitle\_internal .
 Move-Item -Force build\dist\LiveSubtitle\LiveSubtitle.exe .

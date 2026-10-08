@@ -35,7 +35,9 @@ class Config:
 
     # 字幕窗口
     font_size: int = 26
-    en_font_size: int = 15
+    zh_color: str = "#ffffff"
+    en_font_size: int = 18
+    en_color: str = "#ffe08a"
     show_english: bool = True
     bg_opacity: int = 55  # 0-100
     overlay_geometry: list = field(default_factory=lambda: [])  # x, y, w, h
