@@ -1,7 +1,7 @@
 """Always-on-top translucent subtitle window."""
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QSizeGrip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QSizeGrip, QToolButton, QVBoxLayout, QWidget
 
 
 def _shadow(widget: QWidget) -> None:
@@ -40,6 +40,17 @@ class SubtitleOverlay(QWidget):
         self.grip = QSizeGrip(self)
         lay.addWidget(self.grip, 0, Qt.AlignBottom | Qt.AlignRight)
 
+        self.close_btn = QToolButton(self)
+        self.close_btn.setText("✕")
+        self.close_btn.setToolTip("关闭字幕（在主页勾选「显示字幕窗口」可重新打开）")
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.setFixedSize(26, 26)
+        self.close_btn.setStyleSheet(
+            "QToolButton { color: rgba(255,255,255,170); background: transparent; border: none;"
+            " border-radius: 13px; font-size: 15px; font-weight: bold; }"
+            "QToolButton:hover { color: white; background: rgba(220,60,60,200); }")
+        self.close_btn.clicked.connect(self.close)
+
         self.apply_style()
         if cfg.overlay_geometry and len(cfg.overlay_geometry) == 4:
             self.setGeometry(*cfg.overlay_geometry)
@@ -73,6 +84,7 @@ class SubtitleOverlay(QWidget):
         visible = self.isVisible()
         self.setWindowFlag(Qt.WindowTransparentForInput, locked)
         self.grip.setVisible(not locked)
+        self.close_btn.setVisible(not locked)
         if visible:
             self.show()
         self.update()
@@ -95,6 +107,11 @@ class SubtitleOverlay(QWidget):
         self.prev_label.setText("")
         self.zh_label.setText("")
         self.en_label.setText("")
+
+    def resizeEvent(self, e):
+        self.close_btn.move(self.width() - self.close_btn.width() - 6, 6)
+        self.close_btn.raise_()
+        super().resizeEvent(e)
 
     # --- painting / dragging ---
     def paintEvent(self, _):

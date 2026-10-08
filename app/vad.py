@@ -34,6 +34,26 @@ class _StreamingSilero:
         return float(np.asarray(out).reshape(-1)[0])
 
 
+class AutoGain:
+    """Boost quiet audio toward a fixed level so soft speech still trips the VAD.
+    Fast attack / slow release peak follower; near-silence is left alone so noise isn't blown up."""
+
+    def __init__(self, target_peak=0.5, max_gain=30.0, floor=3e-4, release_s=3.0):
+        self.target = target_peak
+        self.max_gain = max_gain
+        self.floor = floor
+        self.decay = 0.5 ** (FRAME / 16000 / release_s)
+        self.env = 0.0
+
+    def process(self, frame: np.ndarray) -> np.ndarray:
+        peak = float(np.max(np.abs(frame))) if len(frame) else 0.0
+        self.env = max(peak, self.env * self.decay)
+        if self.env < self.floor:
+            return frame
+        gain = min(self.max_gain, max(1.0, self.target / self.env))
+        return np.clip(frame * gain, -1.0, 1.0)
+
+
 class SpeechDetector:
     """Feed 512-sample frames; returns a finished utterance (np.ndarray) when one ends."""
 

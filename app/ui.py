@@ -45,6 +45,8 @@ HELP_HTML = """
 <li>「历史记录」页可以回看所有翻译。</li>
 <li>「测试翻译」可以手动输入英文检查翻译效果。</li>
 <li>字幕延迟：对方说完一句后约 0.5–1 秒出现；「断句停顿」调小会更快，但句子容易被切碎。</li>
+<li>轻声没被识别：在「设置」确认「增强轻声」已勾选，或把「识别灵敏度」调到「高」。</li>
+<li>字幕窗口右上角的 × 可以关掉字幕；在主页勾选「显示字幕窗口」重新打开。</li>
 </ul>
 """
 
@@ -248,6 +250,17 @@ class MainWindow(QMainWindow):
         self.cb_partial = QCheckBox("说话过程中先显示英文（实时预览）")
         self.cb_partial.setChecked(self.cfg.show_partial)
         af.addRow(self.cb_partial)
+        self.cb_gain = QCheckBox("增强轻声（自动放大小音量的说话声）")
+        self.cb_gain.setChecked(self.cfg.auto_gain)
+        self.cb_gain.setToolTip("视频里小声说话、远处的人声也能识别。一般保持打开")
+        af.addRow(self.cb_gain)
+        self.cb_sens = QComboBox()
+        for label, th in (("标准（推荐）", 0.5), ("高 —— 更容易捕捉轻声，偶尔会误识别噪音", 0.4),
+                          ("低 —— 只识别清楚的人声，适合背景很吵的游戏", 0.6)):
+            self.cb_sens.addItem(label, th)
+        i = self.cb_sens.findData(self.cfg.vad_threshold)
+        self.cb_sens.setCurrentIndex(max(0, i))
+        af.addRow("识别灵敏度", self.cb_sens)
         v.addWidget(asr)
 
         api = QGroupBox("游戏模式 · 在线翻译 API（OpenAI 兼容接口）")
@@ -291,6 +304,8 @@ class MainWindow(QMainWindow):
         c.whisper_model = self.cb_whisper.currentText()
         c.silence_ms = self.sp_silence.value()
         c.show_partial = self.cb_partial.isChecked()
+        c.auto_gain = self.cb_gain.isChecked()
+        c.vad_threshold = self.cb_sens.currentData()
         c.api_base_url = self.ed_url.text().strip()
         c.api_key = self.ed_key.text().strip()
         c.api_model = self.ed_model.text().strip()

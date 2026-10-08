@@ -15,7 +15,7 @@ from audio import TARGET_RATE, LoopbackCapture
 from config import Config
 from translator import LlamaServer, Translator, ensure_local_model
 from paths import WHISPER_DIR
-from vad import FRAME, SpeechDetector
+from vad import FRAME, AutoGain, SpeechDetector
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +155,10 @@ class Engine:
 
     # ---------- workers ----------
     def _transcribe(self, audio: np.ndarray, beam: int) -> str:
+        # normalise each utterance so quiet speech reaches Whisper at a healthy level
+        peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+        if peak > 1e-4:
+            audio = audio * (0.9 / peak)
         with self._asr_lock:
             segments, _ = self._whisper.transcribe(
                 audio, language=self.cfg.source_language or None, beam_size=beam,
@@ -176,6 +180,7 @@ class Engine:
             threshold=self.cfg.vad_threshold, silence_ms=self.cfg.silence_ms,
             max_segment_s=self.cfg.max_segment_s,
         )
+        agc = AutoGain() if self.cfg.auto_gain else None
         pending = np.zeros(0, dtype=np.float32)
         last_partial = 0.0
         while not self._stop.is_set():
@@ -191,6 +196,8 @@ class Engine:
             pending = np.concatenate([pending, chunk])
             while len(pending) >= FRAME:
                 frame, pending = pending[:FRAME], pending[FRAME:]
+                if agc:
+                    frame = agc.process(frame)
                 segment = vad.push(frame)
                 if segment is not None:
                     self._finish_segment(segment)

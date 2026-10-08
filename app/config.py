@@ -17,6 +17,7 @@ class Config:
 
     # 断句
     vad_threshold: float = 0.5
+    auto_gain: bool = True  # 自动放大轻声
     silence_ms: int = 500
     max_segment_s: float = 8.0
     show_partial: bool = True

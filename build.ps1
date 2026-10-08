@@ -20,4 +20,5 @@ if (Get-Process LiveSubtitle -ErrorAction SilentlyContinue) {
 if (Test-Path _internal) { Remove-Item -Recurse -Force _internal }
 Move-Item build\dist\LiveSubtitle\_internal .
 Move-Item -Force build\dist\LiveSubtitle\LiveSubtitle.exe .
+Remove-Item -Recurse -Force build  # intermediate files only; keeps the folder free of a second copy
 Write-Host "Done: $PSScriptRoot\LiveSubtitle.exe"
