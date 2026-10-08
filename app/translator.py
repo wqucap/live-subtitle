@@ -19,7 +19,18 @@ PROMPT_OTHER = "Translate the following segment into {lang}, without additional 
 PROMPT_ZH_FRAGMENT = "把下面这段还没说完的话翻译成{lang}，只翻译已有的内容，不要补全，不要加括号说明。\n\n{text}"
 PROMPT_OTHER_FRAGMENT = ("Translate this unfinished sentence into {lang}. Translate only what is there, "
                          "do not complete it, no notes.\n\n{text}")
-_NOTES = re.compile(r"[（(][^）)]*[）)]")
+# Hunyuan-MT adds bracketed notes when the source is ambiguous or misheard: the original English
+# after a transliteration, an alternative reading "（或者……）", an explanation. Useful for documents,
+# noise for subtitles — and asking for no notes in the prompt does not stop it, so strip them.
+_NOTES = re.compile(r"\s*[（(【\[][^（()）【\[\]】]*[）)】\]]")
+
+
+def strip_notes(text: str) -> str:
+    prev = None
+    while prev != text:  # repeat for nested brackets
+        prev, text = text, _NOTES.sub("", text)
+    text = re.sub(r"\s+([，。！？；：、,.!?;:])", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def build_prompt(text: str, target: str, fragment: bool = False) -> str:
@@ -54,10 +65,7 @@ class Translator:
         r = self.client.post(f"{self.base_url}/chat/completions", json=body)
         if r.status_code >= 400:
             raise RuntimeError(f"翻译接口返回 {r.status_code}: {r.text[:200]}")
-        out = r.json()["choices"][0]["message"]["content"].strip()
-        if fragment:
-            out = _NOTES.sub("", out).strip()
-        return out
+        return strip_notes(r.json()["choices"][0]["message"]["content"])
 
     def close(self) -> None:
         self.client.close()

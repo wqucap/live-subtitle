@@ -368,6 +368,9 @@ class Engine:
                 log.exception("translate failed")
                 self.cb.error(f"翻译出错：{e}")
                 continue
+            if not zh:
+                log.info("translation was only a bracketed note, not shown: %s", text)
+                continue
             self.cb.translated(seg_id, text, zh, time.time() - t0)
 
     def _translate_partial(self, previous: str) -> str:
@@ -386,7 +389,8 @@ class Engine:
         with self._partial_lock:
             if utt != self._utt:
                 return text  # sentence finished meanwhile; its final translation is on the way
-        self.cb.partial_translated(zh)
+        if zh:
+            self.cb.partial_translated(zh)
         return text
 
     # ---------- diagnostics ----------
