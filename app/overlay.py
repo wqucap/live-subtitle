@@ -96,14 +96,21 @@ class SubtitleOverlay(QWidget):
     def show_final(self, en: str):
         self.en_label.setText(en)
 
+    def show_partial_translation(self, zh: str):
+        """Interim Chinese while the sentence is still being spoken (replaced by the final one)."""
+        self.zh_label.setText(zh.rstrip("。.") + " …")
+
     def show_translation(self, zh: str, en: str):
-        prev = self.zh_label.text()
-        if prev and not prev.startswith("字幕窗口："):
-            self.prev_label.setText(prev)
+        if self._last_final:
+            self.prev_label.setText(self._last_final)
+        self._last_final = zh
         self.zh_label.setText(zh)
         self.en_label.setText(en)
 
+    _last_final = ""
+
     def clear_text(self):
+        self._last_final = ""
         self.prev_label.setText("")
         self.zh_label.setText("")
         self.en_label.setText("")

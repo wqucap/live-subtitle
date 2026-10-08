@@ -1,6 +1,7 @@
 """Translation backends. Both talk to an OpenAI-compatible /chat/completions endpoint:
 local = llama.cpp `llama-server` running Hunyuan-MT-7B, api = any online provider (e.g. SiliconFlow)."""
 import os
+import re
 import subprocess
 import time
 
@@ -13,8 +14,20 @@ PROMPT_ZH = "把下面的文本翻译成{lang}，不要额外解释。\n\n{text}
 PROMPT_OTHER = "Translate the following segment into {lang}, without additional explanation.\n\n{text}"
 
 
-def build_prompt(text: str, target: str) -> str:
-    tpl = PROMPT_ZH if target in ("中文", "简体中文", "繁体中文", "粤语") else PROMPT_OTHER
+# For interim text: the default prompt makes the model "finish" half sentences, invent content and
+# add bracketed notes; this wording keeps it to what was actually said.
+PROMPT_ZH_FRAGMENT = "把下面这段还没说完的话翻译成{lang}，只翻译已有的内容，不要补全，不要加括号说明。\n\n{text}"
+PROMPT_OTHER_FRAGMENT = ("Translate this unfinished sentence into {lang}. Translate only what is there, "
+                         "do not complete it, no notes.\n\n{text}")
+_NOTES = re.compile(r"[（(][^）)]*[）)]")
+
+
+def build_prompt(text: str, target: str, fragment: bool = False) -> str:
+    zh = target in ("中文", "简体中文", "繁体中文", "粤语")
+    if fragment:
+        tpl = PROMPT_ZH_FRAGMENT if zh else PROMPT_OTHER_FRAGMENT
+    else:
+        tpl = PROMPT_ZH if zh else PROMPT_OTHER
     return tpl.format(lang=target, text=text)
 
 
@@ -26,10 +39,10 @@ class Translator:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.client = httpx.Client(headers=headers, timeout=httpx.Timeout(30.0, connect=5.0))
 
-    def translate(self, text: str) -> str:
+    def translate(self, text: str, fragment: bool = False) -> str:
         body = {
             "model": self.model,
-            "messages": [{"role": "user", "content": build_prompt(text, self.target)}],
+            "messages": [{"role": "user", "content": build_prompt(text, self.target, fragment)}],
             # sampling settings recommended for Hunyuan-MT, slightly cooler for stable subtitles
             "temperature": 0.3,
             "top_p": 0.6,
@@ -41,7 +54,10 @@ class Translator:
         r = self.client.post(f"{self.base_url}/chat/completions", json=body)
         if r.status_code >= 400:
             raise RuntimeError(f"翻译接口返回 {r.status_code}: {r.text[:200]}")
-        return r.json()["choices"][0]["message"]["content"].strip()
+        out = r.json()["choices"][0]["message"]["content"].strip()
+        if fragment:
+            out = _NOTES.sub("", out).strip()
+        return out
 
     def close(self) -> None:
         self.client.close()

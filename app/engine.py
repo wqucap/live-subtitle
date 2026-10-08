@@ -34,6 +34,7 @@ class Callbacks:
     final: Callable[[int, str], None]  # (segment id, English)
     translated: Callable[[int, str, str, float], None]  # (segment id, English, translation, seconds)
     error: Callable[[str], None]
+    partial_translated: Callable[[str], None] = lambda zh: None  # interim Chinese while still talking
 
 
 class Engine:
@@ -50,6 +51,10 @@ class Engine:
         self._capture: LoopbackCapture | None = None
         self._tq: "queue.Queue[tuple[int, str, float] | None]" = queue.Queue()
         self._seg_id = 0
+        # interim translation: only the newest partial matters, and only while its utterance is still open
+        self._utt = 0
+        self._partial_lock = threading.Lock()
+        self._partial_job: tuple[int, str] | None = None
         self.running = False
 
     # ---------- model loading ----------
@@ -209,11 +214,17 @@ class Engine:
                         text = self._transcribe(buf, beam=1)
                         if text:
                             self.cb.partial(text)
+                            if self.cfg.partial_translate:
+                                with self._partial_lock:
+                                    self._partial_job = (self._utt, text)
                     except Exception:  # noqa: BLE001
                         log.exception("partial transcribe failed")
 
     def _finish_segment(self, audio: np.ndarray):
         t0 = time.time()
+        with self._partial_lock:
+            self._utt += 1  # interim translations of this utterance are now stale
+            self._partial_job = None
         try:
             text = self._transcribe(audio, beam=3)
         except Exception as e:  # noqa: BLE001
@@ -228,8 +239,13 @@ class Engine:
         self._tq.put((self._seg_id, text, t0))
 
     def _translate_loop(self):
+        last_partial_src = ""
         while not self._stop.is_set():
-            item = self._tq.get()
+            try:
+                item = self._tq.get(timeout=0.05)
+            except queue.Empty:
+                last_partial_src = self._translate_partial(last_partial_src)
+                continue
             if item is None:
                 return
             seg_id, text, t0 = item
@@ -240,6 +256,25 @@ class Engine:
                 self.cb.error(f"翻译出错：{e}")
                 continue
             self.cb.translated(seg_id, text, zh, time.time() - t0)
+
+    def _translate_partial(self, previous: str) -> str:
+        """Translate the newest interim English, if it changed. Only runs when no finished
+        sentence is waiting, so final translations always go first. Returns the text translated."""
+        with self._partial_lock:
+            job, self._partial_job = self._partial_job, None
+        if not job or job[1] == previous:
+            return previous
+        utt, text = job
+        try:
+            zh = self._translator.translate(text, fragment=True)
+        except Exception:  # noqa: BLE001 - a dropped preview is harmless; the final pass reports errors
+            log.exception("partial translate failed")
+            return previous
+        with self._partial_lock:
+            if utt != self._utt:
+                return text  # sentence finished meanwhile; its final translation is on the way
+        self.cb.partial_translated(zh)
+        return text
 
     def translate_once(self, text: str) -> str:
         if not self._translator:

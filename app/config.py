@@ -19,8 +19,9 @@ class Config:
     vad_threshold: float = 0.5
     auto_gain: bool = True  # 自动放大轻声
     silence_ms: int = 500
-    max_segment_s: float = 8.0
+    max_segment_s: float = 6.0
     show_partial: bool = True
+    partial_translate: bool = True  # 边说边翻：说话过程中先显示临时中文
 
     # 本地翻译 (llama.cpp)
     local_model_file: str = "Hunyuan-MT-7B.Q4_K_M.gguf"

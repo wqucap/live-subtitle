@@ -45,6 +45,7 @@ HELP_HTML = """
 <li>「历史记录」页可以回看所有翻译。</li>
 <li>「测试翻译」可以手动输入英文检查翻译效果。</li>
 <li>字幕延迟：对方说完一句后约 0.5–1 秒出现；「断句停顿」调小会更快，但句子容易被切碎。</li>
+<li>长句等太久：「边说边翻译」默认开启，说话过程中会先出临时中文（末尾带 …）；也可以把「最长一句」调短。</li>
 <li>轻声没被识别：在「设置」确认「增强轻声」已勾选，或把「识别灵敏度」调到「高」。</li>
 <li>字幕窗口右上角的 × 可以关掉字幕；在主页勾选「显示字幕窗口」重新打开。</li>
 </ul>
@@ -56,6 +57,7 @@ class Bridge(QObject):
     partial = Signal(str)
     final = Signal(int, str)
     translated = Signal(int, str, str, float)
+    partial_translated = Signal(str)
     error = Signal(str)
     test_result = Signal(str)
 
@@ -92,12 +94,14 @@ class MainWindow(QMainWindow):
         self.bridge.partial.connect(self._on_partial)
         self.bridge.final.connect(self._on_final)
         self.bridge.translated.connect(self._on_translated)
+        self.bridge.partial_translated.connect(lambda zh: self.overlay.show_partial_translation(zh))
         self.bridge.error.connect(self._on_error)
         self.bridge.test_result.connect(lambda s: self.test_out.setText(s))
 
         self.engine = Engine(self.cfg, Callbacks(
             status=self.bridge.status.emit, partial=self.bridge.partial.emit, final=self.bridge.final.emit,
             translated=self.bridge.translated.emit, error=self.bridge.error.emit,
+            partial_translated=self.bridge.partial_translated.emit,
         ))
         self.overlay = SubtitleOverlay(self.cfg)
         self.overlay.show()
@@ -250,6 +254,19 @@ class MainWindow(QMainWindow):
         self.cb_partial = QCheckBox("说话过程中先显示英文（实时预览）")
         self.cb_partial.setChecked(self.cfg.show_partial)
         af.addRow(self.cb_partial)
+        self.cb_partial_zh = QCheckBox("边说边翻译（长句不用等说完，先显示临时中文）")
+        self.cb_partial_zh.setChecked(self.cfg.partial_translate)
+        self.cb_partial_zh.setToolTip("说话过程中约每秒更新一次中文（末尾带 …），说完后换成更准确的最终翻译。\n"
+                                      "游戏模式下会多调用几次在线 API")
+        self.cb_partial.toggled.connect(self.cb_partial_zh.setEnabled)
+        self.cb_partial_zh.setEnabled(self.cfg.show_partial)
+        af.addRow(self.cb_partial_zh)
+        self.sp_maxseg = QSpinBox()
+        self.sp_maxseg.setRange(3, 15)
+        self.sp_maxseg.setSuffix(" 秒")
+        self.sp_maxseg.setValue(int(self.cfg.max_segment_s))
+        self.sp_maxseg.setToolTip("对方一直不停顿时，最多攒这么长就强制断句出最终翻译")
+        af.addRow("最长一句", self.sp_maxseg)
         self.cb_gain = QCheckBox("增强轻声（自动放大小音量的说话声）")
         self.cb_gain.setChecked(self.cfg.auto_gain)
         self.cb_gain.setToolTip("视频里小声说话、远处的人声也能识别。一般保持打开")
@@ -304,6 +321,8 @@ class MainWindow(QMainWindow):
         c.whisper_model = self.cb_whisper.currentText()
         c.silence_ms = self.sp_silence.value()
         c.show_partial = self.cb_partial.isChecked()
+        c.partial_translate = self.cb_partial_zh.isChecked()
+        c.max_segment_s = float(self.sp_maxseg.value())
         c.auto_gain = self.cb_gain.isChecked()
         c.vad_threshold = self.cb_sens.currentData()
         c.api_base_url = self.ed_url.text().strip()
