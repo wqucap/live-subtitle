@@ -52,6 +52,15 @@ def _sentence_cut(words, audio_s: float, clause: bool = False, min_s: float = 1.
 
 
 @dataclass
+class Heard:
+    text: str
+    cut: int | None  # sample where a finished sentence ends with more speech after it
+    last_end: float  # seconds: end of the last recognised word
+    n_words: int
+    confident: bool  # strict: clearly speech, not music/noise
+
+
+@dataclass
 class Callbacks:
     status: Callable[[str, str, str], None]  # (component, state: off|loading|ok|error, message)
     partial: Callable[[str], None]  # interim English while someone is still talking
@@ -187,8 +196,7 @@ class Engine:
 
     # ---------- workers ----------
     def _transcribe(self, audio: np.ndarray, beam: int, words: bool = False, clause: bool = False):
-        """Returns the text, or (text, cut_sample) when words=True: cut_sample is where the last
-        finished sentence ends if more speech follows it (None otherwise)."""
+        """Returns the text, or a Heard (with word timing, sentence cut and confidence) when words=True."""
         # normalise each utterance so quiet speech reaches Whisper at a healthy level
         peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
         if peak > 1e-4:
@@ -199,7 +207,7 @@ class Engine:
                 condition_on_previous_text=False, vad_filter=False,
                 without_timestamps=not words, word_timestamps=words,
             )
-            parts, word_list = [], []
+            parts, word_list, kept = [], [], []
             for s in segments:
                 if s.no_speech_prob > 0.6 and s.avg_logprob < -1.0:
                     if beam > 1:  # final pass only; interim passes run every 0.8 s
@@ -208,6 +216,7 @@ class Engine:
                     continue
                 parts.append(s.text.strip())
                 word_list.extend(s.words or [])
+                kept.append(s)
         text = " ".join(p for p in parts if p).strip()
         if HALLUCINATIONS.match(text):
             if beam > 1:
@@ -215,7 +224,16 @@ class Engine:
             text = ""
         if not words:
             return text
-        return text, (_sentence_cut(word_list, len(audio) / TARGET_RATE, clause) if text else None)
+        # strict bar for "this really is speech" (used to override the VAD)
+        confident = bool(text) and len(word_list) >= 3 and all(
+            s.no_speech_prob < 0.3 and s.avg_logprob > -0.5 and s.compression_ratio < 2.4 for s in kept)
+        return Heard(
+            text=text,
+            cut=_sentence_cut(word_list, len(audio) / TARGET_RATE, clause) if text else None,
+            last_end=word_list[-1].end if (text and word_list) else 0.0,
+            n_words=len(word_list) if text else 0,
+            confident=confident,
+        )
 
     def _audio_loop(self):
         vad = SpeechDetector(
@@ -225,6 +243,12 @@ class Engine:
         agc = AutoGain() if self.cfg.auto_gain else None
         pending = np.zeros(0, dtype=np.float32)
         last_partial = 0.0
+        # Whisper fallback: audio the VAD called "not speech" is kept here (last 3 s) and Whisper
+        # listens to it every 1.5 s. Silero misses e.g. tape-recorder / phone audio that Whisper
+        # transcribes with high confidence; when that happens we follow Whisper ("rescue" mode).
+        idle: "collections.deque[np.ndarray]" = collections.deque(maxlen=int(3.0 * TARGET_RATE / FRAME))
+        last_probe = 0.0
+        rescue = False
         while not self._stop.is_set():
             try:
                 chunk = self._capture.queue.get(timeout=0.2) if self._capture else None
@@ -242,23 +266,60 @@ class Engine:
                 frame, pending = pending[:FRAME], pending[FRAME:]
                 if agc:
                     frame = agc.process(frame)
-                segment = vad.push(frame)
+                segment = vad.push(frame, force=rescue)
                 if segment is not None:
                     self._finish_segment(segment)
-            interim = self.cfg.show_partial or self.cfg.sentence_split
+                if vad.in_speech:
+                    idle.clear()
+                else:
+                    idle.append(frame)
+                    rescue = False
+
+            if (self.cfg.whisper_rescue and not vad.in_speech and len(idle) * FRAME >= 1.5 * TARGET_RATE
+                    and time.time() - last_probe > 1.5 and not self._asr_lock.locked()):
+                last_probe = time.time()
+                window = np.concatenate(idle)
+                if np.sqrt(np.mean(window ** 2)) > 0.003:  # skip (near-)silence
+                    try:
+                        heard = self._transcribe(window, beam=1, words=True)
+                    except Exception:  # noqa: BLE001
+                        log.exception("rescue probe failed")
+                        heard = None
+                    if heard and heard.confident:
+                        log.info("VAD missed speech, Whisper heard %d words: following Whisper", heard.n_words)
+                        vad.open_with(list(idle))
+                        idle.clear()
+                        rescue = True
+                        last_partial = 0.0
+
+            interim = self.cfg.show_partial or self.cfg.sentence_split or rescue
             if interim and vad.in_speech and time.time() - last_partial > 0.8:
                 buf = vad.current()
                 if len(buf) > TARGET_RATE * 0.6 and not self._asr_lock.locked():
                     last_partial = time.time()
                     try:
-                        if self.cfg.sentence_split:
+                        if self.cfg.sentence_split or rescue:
                             near_cap = len(buf) / TARGET_RATE >= self.cfg.max_segment_s - 1.5
-                            text, cut = self._transcribe(buf, beam=1, words=True, clause=near_cap)
+                            heard = self._transcribe(buf, beam=1, words=True, clause=near_cap)
+                            text, cut = heard.text, (heard.cut if self.cfg.sentence_split else None)
                         else:
-                            text, cut = self._transcribe(buf, beam=1), None
+                            heard, text, cut = None, self._transcribe(buf, beam=1), None
                     except Exception:  # noqa: BLE001
                         log.exception("partial transcribe failed")
                         continue
+                    if rescue:
+                        # the VAD can't tell when this kind of speech stops, so Whisper decides:
+                        # nothing recognised, or no word in the last 1.2 s -> close the utterance
+                        if not text:
+                            vad.finish()
+                            rescue = False
+                            continue
+                        if len(buf) / TARGET_RATE - heard.last_end > 1.2:
+                            segment = vad.finish(int((heard.last_end + 0.3) * TARGET_RATE))
+                            rescue = False
+                            if segment is not None:
+                                self._finish_segment(segment)
+                            continue
                     if cut is not None:
                         # a sentence already ended mid-stream (no pause, e.g. over background music):
                         # finalise it now instead of waiting for silence or the length cap

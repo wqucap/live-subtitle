@@ -18,6 +18,7 @@ class Config:
     # 断句
     vad_threshold: float = 0.5
     auto_gain: bool = True  # 自动放大轻声
+    whisper_rescue: bool = True  # 语音检测漏掉时让 Whisper 再听一遍（录音机/电话/很小声的对白）
     silence_ms: int = 500
     max_segment_s: float = 6.0
     show_partial: bool = True

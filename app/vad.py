@@ -35,23 +35,30 @@ class _StreamingSilero:
 
 
 class AutoGain:
-    """Boost quiet audio toward a fixed level so soft speech still trips the VAD.
-    Fast attack / slow release peak follower; near-silence is left alone so noise isn't blown up."""
+    """Bring quiet audio up to a normal level so soft speech still trips the VAD.
 
-    def __init__(self, target_peak=0.5, max_gain=30.0, floor=3e-4, release_s=3.0):
-        self.target = target_peak
+    Tracks the RMS level (fast attack, slow release) and ramps the gain smoothly across each
+    frame: a gain that jumps between frames distorts the signal and *lowers* Silero's
+    confidence. Real captures can sit 30 dB below normal (player volume turned down), hence the
+    high cap; digital near-silence below `floor_rms` is left alone."""
+
+    def __init__(self, target_rms=0.08, max_gain=1000.0, floor_rms=3e-6, attack_s=0.05, release_s=2.0):
+        self.target = target_rms
         self.max_gain = max_gain
-        self.floor = floor
-        self.decay = 0.5 ** (FRAME / 16000 / release_s)
-        self.env = 0.0
+        self.floor = floor_rms
+        frame_s = FRAME / 16000
+        self.a_up = 1 - np.exp(-frame_s / attack_s)
+        self.a_down = 1 - np.exp(-frame_s / release_s)
+        self.level = 0.0
+        self.gain = 1.0
 
     def process(self, frame: np.ndarray) -> np.ndarray:
-        peak = float(np.max(np.abs(frame))) if len(frame) else 0.0
-        self.env = max(peak, self.env * self.decay)
-        if self.env < self.floor:
-            return frame
-        gain = min(self.max_gain, max(1.0, self.target / self.env))
-        return np.clip(frame * gain, -1.0, 1.0)
+        rms = float(np.sqrt(np.mean(frame ** 2))) if len(frame) else 0.0
+        self.level += (self.a_up if rms > self.level else self.a_down) * (rms - self.level)
+        target = 1.0 if self.level < self.floor else min(self.max_gain, max(1.0, self.target / self.level))
+        ramp = np.linspace(self.gain, target, len(frame), dtype=np.float32)
+        self.gain = target
+        return np.clip(frame * ramp, -1.0, 1.0)
 
 
 class SpeechDetector:
@@ -75,8 +82,27 @@ class SpeechDetector:
     def current(self) -> np.ndarray:
         return np.concatenate(self.buf) if self.buf else np.zeros(0, dtype=np.float32)
 
-    def push(self, frame: np.ndarray):
+    def open_with(self, frames: list[np.ndarray]):
+        """Start an utterance from audio the VAD itself rejected (Whisper heard speech in it)."""
+        self.in_speech = True
+        self.buf = list(frames)
+        self.probs = [1.0] * len(self.buf)
+        self.preroll = []
+        self.quiet = 0
+        self.voiced = len(self.buf)
+
+    def finish(self, sample: int | None = None):
+        """Close the current utterance now (optionally at `sample`) and return it."""
+        if not self.in_speech:
+            return None
+        end = len(self.buf) if sample is None else min(len(self.buf), max(1, round(sample / FRAME)))
+        return self._emit(end)
+
+    def push(self, frame: np.ndarray, force: bool = False):
+        """force=True: treat the frame as speech whatever Silero says (Whisper-confirmed speech)."""
         p = self.model.prob(frame)
+        if force:
+            p = max(p, 1.0)
         if not self.in_speech:
             self.preroll.append(frame)
             self.preroll = self.preroll[-self.preroll_frames:]

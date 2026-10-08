@@ -42,6 +42,7 @@ HELP_HTML = """
 <p>翻译的是「电脑正在播放的声音」。如果你有多个输出设备（耳机/音箱），在「声音来源」里选你正在用的那个。</p>
 <h3>小技巧</h3>
 <ul>
+<li><b>播放器音量开到 100%</b>，用 Windows 音量或耳机调你自己听到的大小。程序听到的是播放器输出的声音，播放器音量调得很低时，小声的对白更容易漏掉。</li>
 <li>「历史记录」页可以回看所有翻译。</li>
 <li>「测试翻译」可以手动输入英文检查翻译效果。</li>
 <li>字幕延迟：对方说完一句后约 0.5–1 秒出现；「断句停顿」调小会更快，但句子容易被切碎。</li>
@@ -283,6 +284,11 @@ class MainWindow(QMainWindow):
         self.cb_gain.setChecked(self.cfg.auto_gain)
         self.cb_gain.setToolTip("视频里小声说话、远处的人声也能识别。一般保持打开")
         af.addRow(self.cb_gain)
+        self.cb_rescue = QCheckBox("Whisper 兜底（录音机、电话、很小声的对白也能识别，显卡占用略增）")
+        self.cb_rescue.setChecked(self.cfg.whisper_rescue)
+        self.cb_rescue.setToolTip("有声音但没检测到人声时，每 1.5 秒让 Whisper 再听一遍；\n"
+                                  "它很确定是人话时就照常出字幕。游戏帧数吃紧时可以关掉")
+        af.addRow(self.cb_rescue)
         self.cb_sens = QComboBox()
         for label, th in (("标准（推荐）", 0.5), ("高 —— 更容易捕捉轻声，偶尔会误识别噪音", 0.4),
                           ("低 —— 只识别清楚的人声，适合背景很吵的游戏", 0.6)):
@@ -337,6 +343,7 @@ class MainWindow(QMainWindow):
         c.sentence_split = self.cb_split.isChecked()
         c.max_segment_s = float(self.sp_maxseg.value())
         c.auto_gain = self.cb_gain.isChecked()
+        c.whisper_rescue = self.cb_rescue.isChecked()
         c.vad_threshold = self.cb_sens.currentData()
         c.api_base_url = self.ed_url.text().strip()
         c.api_key = self.ed_key.text().strip()
