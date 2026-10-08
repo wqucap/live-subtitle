@@ -1,0 +1,25 @@
+"""Draws app/icon.ico (a speech bubble with 译). Run once before building."""
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPainterPath
+
+app = QGuiApplication([])
+img = QImage(256, 256, QImage.Format_ARGB32)
+img.fill(Qt.transparent)
+p = QPainter(img)
+p.setRenderHint(QPainter.Antialiasing)
+path = QPainterPath()
+path.addRoundedRect(QRectF(16, 24, 224, 168), 40, 40)
+tail = QPainterPath()
+tail.moveTo(64, 180)
+tail.lineTo(48, 240)
+tail.lineTo(120, 186)
+path = path.united(tail)
+p.fillPath(path, QColor("#2f7cf6"))
+f = QFont("Microsoft YaHei UI")
+f.setPixelSize(120)
+f.setBold(True)
+p.setFont(f)
+p.setPen(QColor("white"))
+p.drawText(QRectF(16, 24, 224, 168), Qt.AlignCenter, "译")
+p.end()
+img.save("app/icon.ico")

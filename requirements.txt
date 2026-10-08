@@ -1,0 +1,9 @@
+faster-whisper>=1.2
+PyAudioWPatch>=0.2.12
+PySide6>=6.11
+numpy
+httpx
+huggingface_hub
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
+pyinstaller

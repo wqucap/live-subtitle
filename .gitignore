@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+build/
+_internal/
+LiveSubtitle.exe
+bin/
+models/
+app/icon.ico
+config.json
+*.log
