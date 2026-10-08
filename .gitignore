@@ -8,3 +8,5 @@ models/
 app/icon.ico
 config.json
 *.log
+*.log.1
+diagnostics/

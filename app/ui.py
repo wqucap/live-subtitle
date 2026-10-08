@@ -47,6 +47,7 @@ HELP_HTML = """
 <li>字幕延迟：对方说完一句后约 0.5–1 秒出现；「断句停顿」调小会更快，但句子容易被切碎。</li>
 <li>长句等太久：「边说边翻译」默认开启，说话过程中会先出临时中文（末尾带 …）；也可以把「最长一句」调短。</li>
 <li>轻声没被识别：在「设置」确认「增强轻声」已勾选，或把「识别灵敏度」调到「高」。</li>
+<li>某段声音完全没识别到：马上到「历史记录」点 <b>🐞 保存最近 30 秒声音</b>，把生成的文件拿去分析。程序平时不保存任何声音，只有点这个按钮才会存。</li>
 <li>字幕窗口右上角的 × 可以关掉字幕；在主页勾选「显示字幕窗口」重新打开。</li>
 </ul>
 """
@@ -211,9 +212,16 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(page)
         self.history = QTextBrowser()
         v.addWidget(self.history, 1)
+        row = QHBoxLayout()
         clear = QPushButton("清空记录")
         clear.clicked.connect(self.history.clear)
-        v.addWidget(clear)
+        diag = QPushButton("🐞 刚才有句话没识别到？保存最近 30 秒声音")
+        diag.setToolTip("把程序刚刚听到的最近 30 秒声音存成文件（只存在本机 diagnostics 文件夹），\n"
+                        "用来排查为什么没识别出来。平时不会保存任何声音。")
+        diag.clicked.connect(self._save_diagnostics)
+        row.addWidget(clear)
+        row.addWidget(diag, 1)
+        v.addLayout(row)
 
         test_box = QGroupBox("测试翻译（开始翻译后可用）")
         th = QVBoxLayout(test_box)
@@ -402,6 +410,18 @@ class MainWindow(QMainWindow):
         # switching modes frees the other model's VRAM, otherwise keep models warm for a fast restart
         self.engine.stop(unload=False)
         self.bridge.status.emit("_stopped", "", "")
+
+    def _save_diagnostics(self):
+        try:
+            path = self.engine.save_recent()
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "没法保存", str(e))
+            return
+        QMessageBox.information(
+            self, "已保存",
+            f"最近 30 秒的声音已保存到：\n{path}\n\n"
+            "把这个文件交给开发者（或 Claude）分析，就能看出是哪一步没识别到。\n"
+            "排查完可以直接删除。")
 
     def _test_translate(self):
         text = self.test_in.text().strip()

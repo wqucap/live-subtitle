@@ -14,6 +14,7 @@ BIN_DIR = ROOT / "bin"
 LLAMA_DIR = BIN_DIR / "llama"
 CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "live-subtitle.log"
+DIAG_DIR = ROOT / "diagnostics"
 
 
 def cuda_dll_dirs() -> list[Path]:

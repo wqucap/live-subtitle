@@ -1,12 +1,16 @@
 """Pipeline: loopback audio -> VAD segmentation -> faster-whisper -> translator.
 
 Runs in background threads and reports through plain callbacks (the UI wraps them in Qt signals)."""
+import collections
+import datetime
 import logging
 import queue
 import re
 import threading
 import time
+import wave
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -14,7 +18,7 @@ import numpy as np
 from audio import TARGET_RATE, LoopbackCapture
 from config import Config
 from translator import LlamaServer, Translator, ensure_local_model
-from paths import WHISPER_DIR
+from paths import DIAG_DIR, WHISPER_DIR
 from vad import FRAME, AutoGain, SpeechDetector
 
 log = logging.getLogger(__name__)
@@ -75,6 +79,9 @@ class Engine:
         self._utt = 0
         self._partial_lock = threading.Lock()
         self._partial_job: tuple[int, str] | None = None
+        # last ~30 s of captured audio, kept in memory only; written to disk when the user asks
+        self._recent: "collections.deque[np.ndarray]" = collections.deque()
+        self._recent_samples = 0
         self.running = False
 
     # ---------- model loading ----------
@@ -195,11 +202,16 @@ class Engine:
             parts, word_list = [], []
             for s in segments:
                 if s.no_speech_prob > 0.6 and s.avg_logprob < -1.0:
+                    if beam > 1:  # final pass only; interim passes run every 0.8 s
+                        log.info("dropped low-confidence text (no_speech=%.2f logprob=%.2f): %s",
+                                 s.no_speech_prob, s.avg_logprob, s.text.strip())
                     continue
                 parts.append(s.text.strip())
                 word_list.extend(s.words or [])
         text = " ".join(p for p in parts if p).strip()
         if HALLUCINATIONS.match(text):
+            if beam > 1:
+                log.info("dropped likely hallucination: %s", text)
             text = ""
         if not words:
             return text
@@ -218,6 +230,8 @@ class Engine:
                 chunk = self._capture.queue.get(timeout=0.2) if self._capture else None
             except queue.Empty:
                 chunk = None
+            if chunk is not None:
+                self._remember(chunk)
             if chunk is None:
                 # no audio callbacks while nothing plays -> treat as silence so open segments close
                 chunk = np.zeros(int(TARGET_RATE * 0.2), dtype=np.float32) if vad.in_speech else None
@@ -313,6 +327,33 @@ class Engine:
                 return text  # sentence finished meanwhile; its final translation is on the way
         self.cb.partial_translated(zh)
         return text
+
+    # ---------- diagnostics ----------
+    RECENT_S = 30
+
+    def _remember(self, chunk: np.ndarray):
+        self._recent.append(chunk)
+        self._recent_samples += len(chunk)
+        while self._recent_samples - len(self._recent[0]) >= self.RECENT_S * TARGET_RATE:
+            self._recent_samples -= len(self._recent.popleft())
+
+    def save_recent(self) -> Path:
+        """Write the last ~30 s of what was heard to diagnostics/ (only when the user asks)."""
+        chunks = list(self._recent)
+        if not chunks:
+            raise RuntimeError("还没有录到声音（需要先开始翻译并播放视频）")
+        audio = np.concatenate(chunks)
+        DIAG_DIR.mkdir(parents=True, exist_ok=True)
+        path = DIAG_DIR / f"missed-{datetime.datetime.now():%Y%m%d-%H%M%S}.wav"
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(TARGET_RATE)
+            w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+        log.info("saved %.1fs of recent audio to %s (settings: vad=%.2f gain=%s split=%s)",
+                 len(audio) / TARGET_RATE, path, self.cfg.vad_threshold, self.cfg.auto_gain,
+                 self.cfg.sentence_split)
+        return path
 
     def translate_once(self, text: str) -> str:
         if not self._translator:

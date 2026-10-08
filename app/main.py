@@ -60,9 +60,11 @@ def selftest(seconds: float) -> None:
 
 
 def main():
+    from logging.handlers import RotatingFileHandler
+
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[logging.FileHandler(LOG_PATH, encoding="utf-8")],
+        handlers=[RotatingFileHandler(LOG_PATH, maxBytes=2_000_000, backupCount=1, encoding="utf-8")],
     )
     if "--selftest" in sys.argv:
         selftest(float(sys.argv[sys.argv.index("--selftest") + 1]))
