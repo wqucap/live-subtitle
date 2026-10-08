@@ -105,6 +105,14 @@ class SpeechDetector:
             return self._emit(cut, keep_rest=True)
         return None
 
+    def cut_at(self, sample: int):
+        """Close the current utterance at `sample` (offset into current()) and keep the rest open.
+        Used to finish a sentence as soon as Whisper sees it end, even without a pause."""
+        if not self.in_speech:
+            return None
+        end = min(len(self.buf) - 1, max(1, round(sample / FRAME)))
+        return self._emit(end, keep_rest=True)
+
     def _emit(self, end: int, keep_rest: bool = False):
         seg, rest = self.buf[:end], self.buf[end:]
         rest_p = self.probs[end:]

@@ -22,6 +22,7 @@ class Config:
     max_segment_s: float = 6.0
     show_partial: bool = True
     partial_translate: bool = True  # 边说边翻：说话过程中先显示临时中文
+    sentence_split: bool = True  # 一句话说完（句号/问号）就立刻出最终翻译，不等停顿
 
     # 本地翻译 (llama.cpp)
     local_model_file: str = "Hunyuan-MT-7B.Q4_K_M.gguf"

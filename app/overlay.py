@@ -76,6 +76,8 @@ class SubtitleOverlay(QWidget):
         self.en_label.setFont(f3)
         self.en_label.setStyleSheet(f"color: {c.en_color};")
         self.en_label.setVisible(c.show_english)
+        if self.isVisible():
+            self._fit()
         self.update()
 
     def set_locked(self, locked: bool):
@@ -92,13 +94,16 @@ class SubtitleOverlay(QWidget):
     # --- content ---
     def show_partial(self, en: str):
         self.en_label.setText(en)
+        self._fit()
 
     def show_final(self, en: str):
         self.en_label.setText(en)
+        self._fit()
 
     def show_partial_translation(self, zh: str):
         """Interim Chinese while the sentence is still being spoken (replaced by the final one)."""
         self.zh_label.setText(zh.rstrip("。.") + " …")
+        self._fit()
 
     def show_translation(self, zh: str, en: str):
         if self._last_final:
@@ -106,6 +111,7 @@ class SubtitleOverlay(QWidget):
         self._last_final = zh
         self.zh_label.setText(zh)
         self.en_label.setText(en)
+        self._fit()
 
     _last_final = ""
 
@@ -114,10 +120,42 @@ class SubtitleOverlay(QWidget):
         self.prev_label.setText("")
         self.zh_label.setText("")
         self.en_label.setText("")
+        self._fit()
+
+    # --- auto height: grow upward for long text, return to the user's size afterwards ---
+    _base_h = 0
+    _auto = False
+
+    def _needed_height(self) -> int:
+        lay = self.layout()
+        m = lay.contentsMargins()
+        inner = self.width() - m.left() - m.right()
+        labels = [lab for lab in (self.prev_label, self.zh_label, self.en_label)
+                  if not lab.isHidden() and lab.text()]
+        h = m.top() + m.bottom() + self.grip.sizeHint().height()
+        h += sum(lab.heightForWidth(inner) for lab in labels) + lay.spacing() * len(labels)
+        return h
+
+    def _fit(self):
+        if not self._base_h:
+            self._base_h = self.height()
+        cap = int(self.screen().availableGeometry().height() * 0.5)
+        need = self._needed_height()
+        if need > cap and self.prev_label.text():
+            self.prev_label.setText("")  # drop the previous line before overflowing
+            need = self._needed_height()
+        target = min(cap, max(self._base_h, need))
+        if target != self.height():
+            g = self.geometry()
+            self._auto = True
+            self.setGeometry(g.x(), g.bottom() + 1 - target, g.width(), target)
+            self._auto = False
 
     def resizeEvent(self, e):
         self.close_btn.move(self.width() - self.close_btn.width() - 6, 6)
         self.close_btn.raise_()
+        if not self._auto:
+            self._base_h = self.height()  # the user resized the window: that's the new base size
         super().resizeEvent(e)
 
     # --- painting / dragging ---
@@ -156,5 +194,7 @@ class SubtitleOverlay(QWidget):
     on_hidden = None
 
     def geometry_list(self):
+        """Saved size is the user's own, not a temporarily grown one."""
         g = self.geometry()
-        return [g.x(), g.y(), g.width(), g.height()]
+        h = self._base_h or g.height()
+        return [g.x(), g.bottom() + 1 - h, g.width(), h]
